@@ -1,0 +1,106 @@
+:root {
+  --bg: #16181d;
+  --panel: #1e2128;
+  --panel-2: #242832;
+  --border: #333845;
+  --text: #e6e8ee;
+  --text-dim: #9aa1b0;
+  --accent: #4f8cff;
+  --accent-2: #38c793;
+  --danger: #e5534b;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s, border-color 0.15s;
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button.danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+input[type="number"],
+input[type="text"],
+select {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+input[type="number"] {
+  width: 72px;
+}
+input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.panel h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.checker {
+  background-image:
+    linear-gradient(45deg, #2a2e38 25%, transparent 25%, transparent 75%, #2a2e38 75%),
+    linear-gradient(45deg, #2a2e38 25%, transparent 25%, transparent 75%, #2a2e38 75%);
+  background-color: #20232b;
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}

@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   import { Application, Graphics, Rectangle, Sprite, Texture } from "pixi.js";
   import { Animator } from "../core/animator";
-  import { frames, packResult, selectedId } from "../core/store";
+  import { frames, packResult, packStale, selectedId } from "../core/store";
   import type { PackedFrame } from "../core/types";
 
   let wrap: HTMLDivElement;
@@ -51,7 +51,8 @@
     const token = ++rebuildToken;
     if (!app) return;
     const list = $frames;
-    const pack = $packResult;
+    // 帧列表在打包后被修改过：旧布局与当前帧不再一一对应，回退为原始帧预览
+    const pack = $packStale ? null : $packResult;
 
     disposeTextures();
     offsets = [];
@@ -166,6 +167,7 @@
   $: if (app) {
     void frameKey;
     void packKey;
+    void $packStale;
     void rebuild();
   }
   $: if (app) {

@@ -62,3 +62,38 @@ for (const [idx, spec] of SPECS.entries()) {
   );
 }
 console.log(`\n已生成 ${SPECS.length} 个测试帧 → ${outDir}`);
+
+// ---------- 增量重打包验证素材（test-assets/extra/，不计入上面的 8 帧） ----------
+const extraDir = join(outDir, "extra");
+mkdirSync(extraDir, { recursive: true });
+
+function fillRect(png, x0, y0, w, h, r, g, b, a = 255) {
+  for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) setPx(png, x, y, r, g, b, a);
+}
+
+// 1) extra_01.png：12×12 全不透明小图 —— 恰好能塞入 walk_07 删除后留下的空洞
+{
+  const png = new PNG({ width: 12, height: 12, fill: true });
+  fillRect(png, 0, 0, 12, 12, 60, 200, 120);
+  setPx(png, 0, 0, 0, 255, 128);
+  setPx(png, 11, 11, 0, 128, 255);
+  writeFileSync(join(extraDir, "extra_01.png"), PNG.sync.write(png));
+}
+
+// 2) walk_04_big.png：与 walk_04.png 同尺寸（128×128）但透明边缘更薄，
+//    内容 108×108（原为 68×68）—— 同名导入即「替换为更大图像」
+{
+  const png = new PNG({ width: 128, height: 128, fill: true });
+  fillRect(png, 10, 10, 108, 108, 200, 120, 240);
+  setPx(png, 10, 10, 0, 255, 128);
+  setPx(png, 117, 117, 0, 128, 255);
+  writeFileSync(join(extraDir, "walk_04_big.png"), PNG.sync.write(png));
+}
+
+// 3) big_300.png：300×300 全不透明 —— 触发「增量不可行 → 全量重排」确认流程
+{
+  const png = new PNG({ width: 300, height: 300, fill: true });
+  fillRect(png, 0, 0, 300, 300, 240, 160, 40);
+  writeFileSync(join(extraDir, "big_300.png"), PNG.sync.write(png));
+}
+console.log("已生成增量验证素材 → test-assets/extra/（extra_01 / walk_04_big / big_300）");

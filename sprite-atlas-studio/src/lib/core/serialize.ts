@@ -1,5 +1,5 @@
 import type { PackLayout } from "./pack";
-import type { Settings } from "./types";
+import type { PackStrategy, Settings } from "./types";
 
 /**
  * 图集 JSON 格式：兼容 TexturePacker "Hash" 结构，
@@ -36,6 +36,8 @@ export interface AtlasJSON {
       padding: number;
       maxSize: number;
       pot: boolean;
+      /** 布局策略（1.1.0 起；旧 JSON 缺省视为 stable） */
+      strategy?: PackStrategy;
     };
     /** 一轮动画总时长（毫秒） */
     totalDuration: number;
@@ -82,7 +84,8 @@ export function buildAtlasJSON(layout: PackLayout, opts: BuildJsonOptions): Atla
       trim: opts.settings.trim,
       padding: opts.settings.padding,
       maxSize: opts.settings.maxSize,
-      pot: opts.settings.pot
+      pot: opts.settings.pot,
+      strategy: opts.settings.strategy
     },
     totalDuration: total
   };
@@ -146,7 +149,8 @@ export function parseAtlasJSON(raw: unknown): ParsedAtlasJSON {
     padding: typeof settingsRaw.padding === "number" ? settingsRaw.padding : 0,
     maxSize: typeof settingsRaw.maxSize === "number" ? settingsRaw.maxSize : size.w,
     pot: settingsRaw.pot !== false,
-    embedAtlas: true
+    embedAtlas: true,
+    strategy: settingsRaw.strategy === "compact" ? "compact" : "stable"
   };
 
   const order: string[] = Array.isArray(meta.frameOrder)

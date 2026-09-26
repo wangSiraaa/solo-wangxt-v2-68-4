@@ -1,8 +1,22 @@
 import { derived, get, writable } from "svelte/store";
-import type { FrameItem, PackResult, PackedFrame, Settings, TrimRect } from "./types";
+import type {
+  FrameItem,
+  LayoutBaseline,
+  PackResult,
+  PackedFrame,
+  Settings,
+  TrimRect
+} from "./types";
 import { DEFAULT_SETTINGS } from "./types";
 import { computeAlphaBBox } from "./trim";
-import { packFrames, type PackInput, type PackLayout } from "./pack";
+import {
+  IncrementalInfeasibleError,
+  packFull,
+  packIncremental,
+  type IncFrameInput,
+  type IncrementalResult
+} from "./incremental";
+import { digestPixels } from "./digest";
 import { buildAtlasJSON, parseAtlasJSON, type AtlasJSON } from "./serialize";
 import {
   blobToImage,
@@ -23,6 +37,13 @@ export const packResult = writable<PackResult | null>(null);
 export const selectedId = writable<string | null>(null);
 export const busy = writable(false);
 export const status = writable<{ kind: "info" | "error"; text: string } | null>(null);
+
+/** 布局基线：上次成功打包的稳定布局，增量重打包以其坐标为基准 */
+export const baseline = writable<LayoutBaseline | null>(null);
+/** 帧列表在打包后被修改过（旧布局仍保留展示，打包后清除） */
+export const packStale = writable(false);
+/** 增量布局不可行时挂起的确认：等待用户选择全量重排或取消 */
+export const pendingRepack = writable<{ reason: string } | null>(null);
 
 export const frameCount = derived(frames, ($f) => $f.length);
 
@@ -59,31 +80,49 @@ export async function addFiles(files: Iterable<File>): Promise<void> {
   }
   busy.set(true);
   try {
-    const current = get(frames);
-    const taken = new Set(current.map((f) => f.name));
-    const added: FrameItem[] = [];
+    const next = [...get(frames)];
+    let added = 0;
+    let replaced = 0;
     for (const file of list) {
       try {
         const img = await blobToImage(file);
-        const name = uniqueName(file.name, taken);
-        taken.add(name);
-        added.push({
-          id: uid(),
-          name,
-          duration: 100,
-          width: img.naturalWidth,
-          height: img.naturalHeight,
-          blob: file,
-          url: URL.createObjectURL(file)
-        });
+        // 同名视为替换：保留 id 与时长，仅更新内容（帧身份 = 逻辑名称 + 内容摘要）
+        const idx = next.findIndex((f) => f.name === file.name);
+        if (idx >= 0) {
+          const old = next[idx]!;
+          URL.revokeObjectURL(old.url);
+          next[idx] = {
+            ...old,
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+            blob: file,
+            url: URL.createObjectURL(file)
+          };
+          replaced++;
+        } else {
+          const taken = new Set(next.map((f) => f.name));
+          next.push({
+            id: uid(),
+            name: uniqueName(file.name, taken),
+            duration: 100,
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+            blob: file,
+            url: URL.createObjectURL(file)
+          });
+          added++;
+        }
       } catch {
         notify(`无法解码图片：${file.name}`, "error");
       }
     }
-    if (added.length > 0) {
-      frames.set([...current, ...added]);
-      packResult.set(null); // 帧变化后旧的打包结果失效
-      notify(`已导入 ${added.length} 帧`);
+    if (added > 0 || replaced > 0) {
+      frames.set(next);
+      if (get(packResult)) packStale.set(true); // 旧布局保留展示，标记待更新
+      const parts: string[] = [];
+      if (added > 0) parts.push(`新增 ${added} 帧`);
+      if (replaced > 0) parts.push(`替换 ${replaced} 帧`);
+      notify(`已导入：${parts.join("，")}`);
     }
   } finally {
     busy.set(false);
@@ -96,7 +135,7 @@ export function removeFrame(id: string): void {
   if (!f) return;
   URL.revokeObjectURL(f.url);
   frames.set(list.filter((x) => x.id !== id));
-  packResult.set(null);
+  if (get(packResult)) packStale.set(true);
 }
 
 export function moveFrame(id: string, dir: -1 | 1): void {
@@ -108,7 +147,7 @@ export function moveFrame(id: string, dir: -1 | 1): void {
   list[i] = list[j]!;
   list[j] = a;
   frames.set(list);
-  packResult.set(null);
+  if (get(packResult)) packStale.set(true);
 }
 
 export function setDuration(id: string, ms: number): void {
@@ -129,6 +168,9 @@ export function clearAll(): void {
   frames.set([]);
   packResult.set(null);
   selectedId.set(null);
+  baseline.set(null);
+  packStale.set(false);
+  pendingRepack.set(null);
   lastJSON = null;
 }
 
@@ -138,30 +180,79 @@ interface TrimmedFrame {
   item: FrameItem;
   canvas: HTMLCanvasElement;
   trim: TrimRect;
+  /** 内容摘要（解码后 RGBA），与名称共同决定帧身份 */
+  digest: string;
 }
 
-/** 裁切（或保留）单帧，返回内容画布与裁切信息 */
+/** 裁切（或保留）单帧，返回内容画布、裁切信息与内容摘要 */
 async function trimFrame(item: FrameItem, doTrim: boolean): Promise<TrimmedFrame> {
   const img = await blobToImage(item.blob);
+  const pixels = imageToPixels(img, item.width, item.height);
+  const digest = digestPixels(pixels);
   if (!doTrim) {
     const canvas = makeCanvas(item.width, item.height);
     ctx2d(canvas).drawImage(img, 0, 0);
-    return { item, canvas, trim: { x: 0, y: 0, w: item.width, h: item.height } };
+    return { item, canvas, trim: { x: 0, y: 0, w: item.width, h: item.height }, digest };
   }
-  const pixels = imageToPixels(img, item.width, item.height);
   const bbox = computeAlphaBBox(pixels);
   if (!bbox) {
     // 完全透明：保留 1×1，避免 0 尺寸
     const canvas = makeCanvas(1, 1);
-    return { item, canvas, trim: { x: 0, y: 0, w: 1, h: 1 } };
+    return { item, canvas, trim: { x: 0, y: 0, w: 1, h: 1 }, digest };
   }
   const canvas = makeCanvas(bbox.w, bbox.h);
   ctx2d(canvas).drawImage(img, bbox.x, bbox.y, bbox.w, bbox.h, 0, 0, bbox.w, bbox.h);
-  return { item, canvas, trim: bbox };
+  return { item, canvas, trim: bbox, digest };
 }
 
-/** 执行打包并生成图集 */
-export async function pack(): Promise<void> {
+/** 应用打包结果：合成图集、更新 stores（只有成功才会调用，失败/取消不污染旧布局） */
+async function applyPackOutcome(outcome: IncrementalResult, trimmed: TrimmedFrame[]): Promise<void> {
+  const { layout, summary } = outcome;
+  const s = get(settings);
+
+  const atlas = makeCanvas(layout.atlasWidth, layout.atlasHeight);
+  const ctx = ctx2d(atlas);
+  const canvasById = new Map(trimmed.map((t) => [t.item.id, t.canvas]));
+  for (const f of layout.frames) {
+    const c = canvasById.get(f.id);
+    if (c) ctx.drawImage(c, f.x, f.y);
+  }
+
+  const old = get(packResult);
+  if (old) URL.revokeObjectURL(old.atlasUrl);
+  const atlasBlob = await canvasToBlob(atlas);
+  const result: PackResult = {
+    atlasWidth: layout.atlasWidth,
+    atlasHeight: layout.atlasHeight,
+    frames: layout.frames,
+    atlasBlob,
+    atlasUrl: URL.createObjectURL(atlasBlob),
+    padding: s.padding,
+    trimmed: s.trim,
+    summary
+  };
+  packResult.set(result);
+  baseline.set(outcome.baseline);
+  packStale.set(false);
+  pendingRepack.set(null);
+  lastJSON = buildAtlasJSON(layout, {
+    imageName: "atlas.png",
+    trimmed: s.trim,
+    settings: s
+  });
+  notify(
+    `打包完成：${layout.atlasWidth}×${layout.atlasHeight}，共 ${layout.frames.length} 帧 · ` +
+      `保持 ${summary.kept} · 移动 ${summary.moved} · 新增 ${summary.added} · 删除 ${summary.deleted}`
+  );
+}
+
+/**
+ * 执行打包并生成图集。
+ * 稳定优先：有基线时做增量重打包（复用未变化帧坐标）；
+ * 紧凑优先或强制：全量重排。
+ * 增量不可行时不改动旧结果，挂起 pendingRepack 等待用户确认。
+ */
+export async function pack(opts: { forceFull?: boolean } = {}): Promise<void> {
   const list = get(frames);
   if (list.length === 0) {
     notify("请先导入 PNG 帧", "error");
@@ -173,7 +264,7 @@ export async function pack(): Promise<void> {
     const trimmed: TrimmedFrame[] = [];
     for (const item of list) trimmed.push(await trimFrame(item, s.trim));
 
-    const inputs: PackInput[] = trimmed.map((t) => ({
+    const inputs: IncFrameInput[] = trimmed.map((t) => ({
       id: t.item.id,
       name: t.item.name,
       w: t.canvas.width,
@@ -181,44 +272,57 @@ export async function pack(): Promise<void> {
       trim: t.trim,
       srcW: t.item.width,
       srcH: t.item.height,
-      duration: t.item.duration
+      duration: t.item.duration,
+      digest: t.digest
     }));
 
-    const layout: PackLayout = packFrames(inputs, s.padding, s.maxSize, s.pot);
-
-    // 合成图集画布
-    const atlas = makeCanvas(layout.atlasWidth, layout.atlasHeight);
-    const ctx = ctx2d(atlas);
-    const canvasById = new Map(trimmed.map((t) => [t.item.id, t.canvas]));
-    for (const f of layout.frames) {
-      const c = canvasById.get(f.id);
-      if (c) ctx.drawImage(c, f.x, f.y);
-    }
-
-    const old = get(packResult);
-    if (old) URL.revokeObjectURL(old.atlasUrl);
-    const atlasBlob = await canvasToBlob(atlas);
-    const result: PackResult = {
-      atlasWidth: layout.atlasWidth,
-      atlasHeight: layout.atlasHeight,
-      frames: layout.frames,
-      atlasBlob,
-      atlasUrl: URL.createObjectURL(atlasBlob),
+    const base = get(baseline);
+    const incOpts = {
       padding: s.padding,
-      trimmed: s.trim
+      maxSize: s.maxSize,
+      pot: s.pot,
+      trim: s.trim,
+      strategy: s.strategy
     };
-    packResult.set(result);
-    lastJSON = buildAtlasJSON(layout, {
-      imageName: "atlas.png",
-      trimmed: s.trim,
-      settings: s
-    });
-    notify(`打包完成：${layout.atlasWidth}×${layout.atlasHeight}，共 ${layout.frames.length} 帧`);
+
+    let outcome: IncrementalResult;
+    if (opts.forceFull) {
+      outcome = packFull(inputs, base, incOpts, "按确认执行全量重排");
+    } else if (s.strategy === "compact") {
+      outcome = packFull(inputs, base, incOpts, "紧凑优先：全量重排");
+    } else if (!base) {
+      outcome = packFull(inputs, null, incOpts, "首次打包");
+    } else {
+      try {
+        outcome = packIncremental(inputs, base, incOpts);
+      } catch (e) {
+        if (e instanceof IncrementalInfeasibleError) {
+          // 不触碰旧布局，等待用户选择全量重排或取消
+          pendingRepack.set({ reason: e.message });
+          notify("增量布局无法满足尺寸，请选择全量重排或取消", "error");
+          return;
+        }
+        throw e;
+      }
+    }
+    await applyPackOutcome(outcome, trimmed);
   } catch (e) {
     notify(e instanceof Error ? e.message : String(e), "error");
   } finally {
     busy.set(false);
   }
+}
+
+/** 确认全量重排（放弃增量稳定性） */
+export async function confirmFullRepack(): Promise<void> {
+  pendingRepack.set(null);
+  await pack({ forceFull: true });
+}
+
+/** 取消全量重排，保留原有布局 */
+export function cancelFullRepack(): void {
+  pendingRepack.set(null);
+  notify("已取消全量重排，保留原有布局");
 }
 
 // ---------- 导出 ----------
@@ -286,9 +390,11 @@ export async function importJSON(jsonFile: File, atlasFile?: File): Promise<void
     // 从图集切出每帧内容，再按 spriteSourceSize 放回原始尺寸画布
     const restored: FrameItem[] = [];
     const packedFrames: PackedFrame[] = [];
+    const baselineFrames: LayoutBaseline["frames"] = [];
     for (const f of parsed.frames) {
       const full = makeCanvas(f.sourceSize.w, f.sourceSize.h);
-      ctx2d(full).drawImage(
+      const fctx = ctx2d(full);
+      fctx.drawImage(
         atlasImg,
         f.frame.x,
         f.frame.y,
@@ -299,7 +405,11 @@ export async function importJSON(jsonFile: File, atlasFile?: File): Promise<void
         f.frame.w,
         f.frame.h
       );
+      // 内容摘要：从重新编码的 blob 解码计算，与打包时的计算路径完全一致，
+      // 保证「导出 → 导入 → 再打包」帧身份稳定（恢复帧与原图逐像素一致）
       const blob = await canvasToBlob(full);
+      const decoded = await blobToImage(blob);
+      const digest = digestPixels(imageToPixels(decoded, full.width, full.height));
       const id = uid();
       restored.push({
         id,
@@ -322,6 +432,14 @@ export async function importJSON(jsonFile: File, atlasFile?: File): Promise<void
         srcH: f.sourceSize.h,
         duration: f.duration
       });
+      baselineFrames.push({
+        name: f.name,
+        digest,
+        x: f.frame.x,
+        y: f.frame.y,
+        w: f.frame.w,
+        h: f.frame.h
+      });
     }
 
     clearAll();
@@ -336,6 +454,16 @@ export async function importJSON(jsonFile: File, atlasFile?: File): Promise<void
       padding: parsed.settings.padding,
       trimmed: parsed.settings.trim
     });
+    // 以导入的坐标为基线，后续增量打包继续复用原位置
+    baseline.set({
+      atlasWidth: parsed.size.w,
+      atlasHeight: parsed.size.h,
+      padding: parsed.settings.padding,
+      trim: parsed.settings.trim,
+      pot: parsed.settings.pot,
+      frames: baselineFrames
+    });
+    packStale.set(false);
     lastJSON = buildAtlasJSON(
       { atlasWidth: parsed.size.w, atlasHeight: parsed.size.h, frames: packedFrames },
       { imageName: parsed.imageName, trimmed: parsed.settings.trim, settings: parsed.settings }
@@ -352,7 +480,9 @@ export async function importJSON(jsonFile: File, atlasFile?: File): Promise<void
 
 export async function saveNow(): Promise<void> {
   try {
-    await saveProject(toStored(get(frames), get(settings), get(packResult), lastJSON));
+    await saveProject(
+      toStored(get(frames), get(settings), get(packResult), lastJSON, get(baseline), get(packResult)?.summary ?? null)
+    );
     notify("项目已保存到浏览器本地");
   } catch (e) {
     notify(`保存失败：${e instanceof Error ? e.message : String(e)}`, "error");
@@ -395,10 +525,14 @@ export async function restoreFromDB(): Promise<boolean> {
         atlasBlob: stored.pack.atlasBlob,
         atlasUrl: URL.createObjectURL(stored.pack.atlasBlob),
         padding: parsed.settings.padding,
-        trimmed: parsed.settings.trim
+        trimmed: parsed.settings.trim,
+        ...(stored.lastSummary ? { summary: stored.lastSummary } : {})
       });
       lastJSON = stored.pack.json;
     }
+    // 恢复布局基线：刷新后继续增量打包仍以原坐标为基准
+    baseline.set(stored.baseline ?? null);
+    packStale.set(false);
     return true;
   } catch {
     return false;
@@ -416,7 +550,9 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleSave(): void {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    void saveProject(toStored(get(frames), get(settings), get(packResult), lastJSON)).catch(() => {});
+    void saveProject(
+      toStored(get(frames), get(settings), get(packResult), lastJSON, get(baseline), get(packResult)?.summary ?? null)
+    ).catch(() => {});
   }, 600);
 }
 
@@ -424,4 +560,5 @@ export function startAutoSave(): void {
   frames.subscribe(() => scheduleSave());
   settings.subscribe(() => scheduleSave());
   packResult.subscribe(() => scheduleSave());
+  baseline.subscribe(() => scheduleSave());
 }

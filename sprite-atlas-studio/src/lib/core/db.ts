@@ -1,9 +1,10 @@
 import { openDB, type IDBPDatabase } from "idb";
-import type { FrameItem, PackResult, Settings } from "./types";
+import type { FrameItem, LayoutBaseline, PackResult, PackSummary, Settings } from "./types";
 import type { AtlasJSON } from "./serialize";
 
 /**
- * IndexedDB 持久化：帧 PNG（Blob）、时长、设置与最近一次打包结果
+ * IndexedDB 持久化：帧 PNG（Blob）、时长、设置、最近一次打包结果，
+ * 以及增量重打包所需的布局基线、策略与结果摘要。
  * 全部保存在浏览器本地，不上传任何数据。
  */
 
@@ -29,6 +30,10 @@ export interface StoredProject {
     blob: Blob;
   }>;
   pack: StoredPack | null;
+  /** 布局基线（增量重打包的坐标基准） */
+  baseline?: LayoutBaseline | null;
+  /** 最近一次打包的结果摘要 */
+  lastSummary?: PackSummary | null;
 }
 
 function db(): Promise<IDBPDatabase> {
@@ -60,7 +65,9 @@ export function toStored(
   frames: FrameItem[],
   settings: Settings,
   pack: PackResult | null,
-  json: AtlasJSON | null
+  json: AtlasJSON | null,
+  baseline: LayoutBaseline | null = null,
+  lastSummary: PackSummary | null = null
 ): StoredProject {
   return {
     version: 1,
@@ -74,6 +81,8 @@ export function toStored(
       height: f.height,
       blob: f.blob
     })),
-    pack: pack && json ? { json, atlasBlob: pack.atlasBlob } : null
+    pack: pack && json ? { json, atlasBlob: pack.atlasBlob } : null,
+    baseline,
+    lastSummary
   };
 }

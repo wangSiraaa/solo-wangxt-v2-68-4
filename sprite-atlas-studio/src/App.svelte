@@ -5,7 +5,16 @@
   import FrameList from "./lib/components/FrameList.svelte";
   import Preview from "./lib/components/Preview.svelte";
   import AtlasView from "./lib/components/AtlasView.svelte";
-  import { addFiles, restoreFromDB, startAutoSave, status, notify } from "./lib/core/store";
+  import {
+    addFiles,
+    cancelFullRepack,
+    confirmFullRepack,
+    notify,
+    pendingRepack,
+    restoreFromDB,
+    startAutoSave,
+    status
+  } from "./lib/core/store";
 
   let ready = false;
   let dragOver = false;
@@ -40,6 +49,22 @@
 
 {#if dragOver}
   <div class="drop-hint">松开以导入 PNG 帧</div>
+{/if}
+
+{#if $pendingRepack}
+  <div class="modal-backdrop" id="repack-dialog" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h3>增量布局无法满足尺寸</h3>
+      <p class="reason mono" id="repack-reason">{$pendingRepack.reason}</p>
+      <p>保持旧布局不变并取消，或全量重排（会重新布局所有帧，多数坐标可能变化）。</p>
+      <div class="actions">
+        <button id="confirm-full-repack" class="primary" on:click={() => void confirmFullRepack()}>
+          全量重排
+        </button>
+        <button id="cancel-full-repack" on:click={cancelFullRepack}>取消（保留旧布局）</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 {#if ready}
@@ -110,6 +135,42 @@
     border-radius: 10px;
     text-align: center;
     color: var(--accent);
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal {
+    width: min(480px, 90vw);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .modal h3 {
+    margin: 0 0 10px;
+    font-size: 15px;
+  }
+  .modal p {
+    margin: 6px 0;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .modal .reason {
+    color: var(--danger);
+    word-break: break-all;
+  }
+  .modal .actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+    justify-content: flex-end;
   }
 
   @media (max-width: 1100px) {

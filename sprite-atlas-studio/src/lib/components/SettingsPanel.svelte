@@ -35,11 +35,20 @@
     </label>
 
     <label class="row">
+      布局策略
+      <select id="opt-strategy" bind:value={$settings.strategy}>
+        <option value="stable">稳定优先（增量复用原位置）</option>
+        <option value="compact">紧凑优先（全量重排）</option>
+      </select>
+    </label>
+
+    <label class="row">
       <input id="opt-embed" type="checkbox" bind:checked={$settings.embedAtlas} />
       导出 JSON 时内嵌图集（可独立恢复）
     </label>
 
     <div class="row dim">矩形打包：maxrects-packer · 固定方向，不旋转</div>
+    <div class="row dim">稳定优先：未变化帧保持原坐标，仅必要时移动最少帧</div>
   </div>
 
   <h2 style="margin-top: 14px;">帧时长</h2>

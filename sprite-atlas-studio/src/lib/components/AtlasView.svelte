@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { packResult, selectedId } from "../core/store";
+  import { packResult, packStale, selectedId } from "../core/store";
+  import PackReportPanel from "./PackReportPanel.svelte";
 
   let hoverName: string | null = null;
 </script>
@@ -10,6 +11,16 @@
   {#if !$packResult}
     <div class="empty">尚未打包。设置好参数后点击「打包图集」。</div>
   {:else}
+    {#if $packResult.report}
+      <PackReportPanel report={$packResult.report} />
+    {/if}
+
+    {#if $packStale}
+      <div class="baseline-banner" id="baseline-banner">
+        帧已变更：以下为<b>旧布局基线</b>（坐标被保留）。点击「打包图集」做增量重打包。
+      </div>
+    {/if}
+
     <div class="summary mono" id="atlas-summary">
       图集 {$packResult.atlasWidth}×{$packResult.atlasHeight} · {$packResult.frames.length} 帧 ·
       留白 {$packResult.padding}px · {$packResult.trimmed ? "已裁切透明边缘" : "未裁切"}
@@ -17,7 +28,7 @@
 
     <div class="atlas-wrap checker">
       <img src={$packResult.atlasUrl} alt="atlas" id="atlas-image" draggable="false" />
-      {#each $packResult.frames as f, i (f.id)}
+      {#each $packResult.frames as f, i (f.name)}
         <button
           class="rect"
           class:active={$selectedId === f.id}
@@ -45,7 +56,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each $packResult.frames as f, i (f.id)}
+          {#each $packResult.frames as f, i (f.name)}
             <tr
               class:active={$selectedId === f.id || hoverName === f.name}
               data-row-for={f.name}
@@ -72,6 +83,15 @@
   .empty {
     color: var(--text-dim);
     padding: 12px 4px;
+  }
+  .baseline-banner {
+    font-size: 12px;
+    color: #ffd166;
+    background: rgba(255, 209, 102, 0.1);
+    border: 1px solid rgba(255, 209, 102, 0.4);
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin-bottom: 8px;
   }
   .summary {
     color: var(--text-dim);

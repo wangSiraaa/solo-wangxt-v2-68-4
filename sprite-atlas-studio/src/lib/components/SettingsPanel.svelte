@@ -39,6 +39,18 @@
       导出 JSON 时内嵌图集（可独立恢复）
     </label>
 
+    <div class="row strategy" role="radiogroup" aria-label="重排策略">
+      <span class="strategy-label">增量重排策略</span>
+      <label class="seg">
+        <input type="radio" name="strategy" value="stable" bind:group={$settings.strategy} />
+        <span title="新增/删除/替换少量帧时尽量复用旧坐标，只移动必要的帧">稳定优先</span>
+      </label>
+      <label class="seg">
+        <input type="radio" name="strategy" value="compact" bind:group={$settings.strategy} />
+        <span title="忽略旧坐标，全部重新紧凑排布（可能更省空间）">紧凑优先</span>
+      </label>
+    </div>
+
     <div class="row dim">矩形打包：maxrects-packer · 固定方向，不旋转</div>
   </div>
 
@@ -66,5 +78,26 @@
   .dim {
     color: var(--text-dim);
     font-size: 12px;
+  }
+  .strategy {
+    gap: 6px;
+  }
+  .strategy-label {
+    color: var(--text-dim);
+    font-size: 12px;
+    margin-right: 2px;
+  }
+  .seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  .seg input {
+    margin: 0;
   }
 </style>

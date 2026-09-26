@@ -9,7 +9,9 @@
     importJSON,
     pack,
     packResult,
-    saveNow
+    packStale,
+    saveNow,
+    settings
   } from "../core/store";
 
   let pngInput: HTMLInputElement;
@@ -59,8 +61,20 @@
 
   <span class="sep"></span>
 
-  <button class="primary" id="pack-btn" disabled={$busy || $frameCount === 0} on:click={() => void pack()}>
-    {$busy ? "处理中…" : "打包图集"}
+  <button
+    class="primary"
+    id="pack-btn"
+    disabled={$busy || $frameCount === 0}
+    on:click={() => void pack()}
+    title={$packStale ? "基于旧布局基线做增量重打包（稳定优先），或在设置中切换紧凑优先做全量重排" : undefined}
+  >
+    {$busy
+      ? "处理中…"
+      : $packStale
+        ? $settings.strategy === "stable"
+          ? "增量打包图集"
+          : "紧凑重排图集"
+        : "打包图集"}
   </button>
   <button id="export-png-btn" disabled={!$packResult} on:click={exportPNG}>导出图集 PNG</button>
   <button id="export-json-btn" disabled={!$packResult} on:click={() => void exportJSON()}>导出 JSON</button>

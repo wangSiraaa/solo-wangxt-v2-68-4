@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from "svelte";
   import { Application, Graphics, Rectangle, Sprite, Texture } from "pixi.js";
   import { Animator } from "../core/animator";
-  import { frames, packResult, selectedId } from "../core/store";
+  import { frames, livePack, selectedId } from "../core/store";
   import type { PackedFrame } from "../core/types";
 
   let wrap: HTMLDivElement;
@@ -51,7 +51,7 @@
     const token = ++rebuildToken;
     if (!app) return;
     const list = $frames;
-    const pack = $packResult;
+    const pack = $livePack;
 
     disposeTextures();
     offsets = [];
@@ -162,7 +162,7 @@
 
   // 帧集合或打包结果变化 → 重建纹理；时长变化 → 只更新动画器
   $: frameKey = $frames.map((f) => f.id).join(",");
-  $: packKey = $packResult ? $packResult.atlasUrl : "";
+  $: packKey = $livePack ? $livePack.atlasUrl : "";
   $: if (app) {
     void frameKey;
     void packKey;

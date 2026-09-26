@@ -5,6 +5,7 @@
   import FrameList from "./lib/components/FrameList.svelte";
   import Preview from "./lib/components/Preview.svelte";
   import AtlasView from "./lib/components/AtlasView.svelte";
+  import RepackDialog from "./lib/components/RepackDialog.svelte";
   import { addFiles, restoreFromDB, startAutoSave, status, notify } from "./lib/core/store";
 
   let ready = false;
@@ -41,6 +42,8 @@
 {#if dragOver}
   <div class="drop-hint">松开以导入 PNG 帧</div>
 {/if}
+
+<RepackDialog />
 
 {#if ready}
   <main>

@@ -37,3 +37,45 @@ export function nextPow2(n: number): number {
   if (n <= 1) return 1;
   return 2 ** Math.ceil(Math.log2(n));
 }
+
+/**
+ * 计算裁切后内容的摘要哈希。
+ * 优先使用浏览器/Node 的 SubtleCrypto（SHA-256），不可用时退化为
+ * FNV-1a 32 位（同样确定性，纯同步）。哈希只依赖 RGBA 字节与尺寸，
+ * 因此同内容（含相同空白）必得同摘要；返回 hex 字符串。
+ */
+export async function hashPixels(pixels: Pixels): Promise<string> {
+  const header = new Uint8Array(8);
+  const dv = new DataView(header.buffer);
+  dv.setUint32(0, pixels.width >>> 0);
+  dv.setUint32(4, pixels.height >>> 0);
+  const bytes = concatBytes(header, pixels.data);
+
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle) {
+    try {
+      const digest = await subtle.digest("SHA-256", bytes as unknown as ArrayBuffer);
+      return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    } catch {
+      // fall through to FNV-1a
+    }
+  }
+  return "fnv1a:" + fnv1a(bytes);
+}
+
+function concatBytes(head: Uint8Array, body: Uint8ClampedArray): Uint8Array {
+  const out = new Uint8Array(head.length + body.length);
+  out.set(head, 0);
+  out.set(body, head.length);
+  return out;
+}
+
+function fnv1a(bytes: Uint8Array): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) {
+    h ^= bytes[i] ?? 0;
+    // 32 位 FNV prime，用无符号乘并取模 2^32
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}

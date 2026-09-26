@@ -84,4 +84,54 @@ describe("buildAtlasJSON / parseAtlasJSON", () => {
     expect(json.meta.app).toBe(JSON_APP_ID);
     expect(json.meta.totalDuration).toBe(50 + 80 + 120);
   });
+
+  it("增量基线字段往返：strategy / contentHash / incremental / lastReport", () => {
+    const layout = makeLayout();
+    // 模拟带内容哈希的帧与增量结果摘要
+    layout.frames.forEach((f, i) => (f.hash = `sha${i}`));
+    const report = {
+      incremental: true,
+      strategy: "stable" as const,
+      kept: 1,
+      moved: 1,
+      replaced: 0,
+      added: 1,
+      removed: 0,
+      deltas: [
+        { name: "run_01.png", kind: "kept" as const, dx: 0, dy: 0 },
+        { name: "run_02.png", kind: "moved" as const, dx: 10, dy: -4 },
+        { name: "run_03.png", kind: "added" as const, dx: 0, dy: 0 }
+      ],
+      timestamp: 123
+    };
+    const json = buildAtlasJSON(layout, {
+      imageName: "atlas.png",
+      trimmed: true,
+      settings: { ...DEFAULT_SETTINGS, strategy: "stable" },
+      incremental: true,
+      report
+    });
+
+    const parsed = parseAtlasJSON(JSON.parse(JSON.stringify(json)));
+    expect(parsed.settings.strategy).toBe("stable");
+    expect(parsed.incremental).toBe(true);
+    expect(parsed.report).toEqual(report);
+    expect(parsed.frames.map((f) => f.contentHash)).toEqual(["sha0", "sha1", "sha2"]);
+  });
+
+  it("旧版 1.0 JSON（无 strategy）解析为稳定优先且不报错", () => {
+    const layout = makeLayout();
+    const json = buildAtlasJSON(layout, {
+      imageName: "atlas.png",
+      trimmed: true,
+      settings: DEFAULT_SETTINGS
+    });
+    const legacy = JSON.parse(JSON.stringify(json));
+    delete legacy.meta.settings.strategy;
+    delete legacy.meta.incremental;
+    const parsed = parseAtlasJSON(legacy);
+    expect(parsed.settings.strategy).toBe("stable");
+    expect(parsed.incremental).toBe(false);
+    expect(parsed.report).toBeUndefined();
+  });
 });

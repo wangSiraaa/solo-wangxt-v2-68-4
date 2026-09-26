@@ -1,14 +1,15 @@
 import type { PackLayout } from "./pack";
-import type { Settings } from "./types";
+import type { PackReport, PackStrategy, Settings } from "./types";
 
 /**
  * 图集 JSON 格式：兼容 TexturePacker "Hash" 结构，
- * 并扩展 duration / frameOrder / settings / atlasDataURL，
- * 使重新导入后能完整恢复帧列表、顺序、时长与打包结果。
+ * 并扩展 duration / frameOrder / settings / atlasDataURL / contentHash /
+ * incremental / strategy / lastReport，
+ * 使重新导入后能完整恢复帧列表、顺序、时长、打包结果与增量布局基线。
  */
 
 export const JSON_APP_ID = "sprite-atlas-studio";
-export const JSON_VERSION = "1.0.0";
+export const JSON_VERSION = "1.1.0";
 
 export interface AtlasJSONFrame {
   frame: { x: number; y: number; w: number; h: number };
@@ -18,6 +19,8 @@ export interface AtlasJSONFrame {
   sourceSize: { w: number; h: number };
   /** 帧时长（毫秒） */
   duration: number;
+  /** 内容摘要（裁切后像素哈希）：帧身份 = 名称 + 摘要 */
+  contentHash?: string;
 }
 
 export interface AtlasJSON {
@@ -36,11 +39,17 @@ export interface AtlasJSON {
       padding: number;
       maxSize: number;
       pot: boolean;
+      /** 重排策略：stable（稳定优先）/ compact（紧凑优先） */
+      strategy?: PackStrategy;
     };
     /** 一轮动画总时长（毫秒） */
     totalDuration: number;
     /** 内嵌图集（data:image/png;base64,...），存在时可独立恢复 */
     atlasDataURL?: string;
+    /** 最近一次结果是否为增量打包 */
+    incremental?: boolean;
+    /** 最近一次打包的变更摘要 */
+    lastReport?: PackReport;
   };
 }
 
@@ -49,6 +58,8 @@ export interface BuildJsonOptions {
   trimmed: boolean;
   settings: Settings;
   atlasDataURL?: string;
+  incremental?: boolean;
+  report?: PackReport;
 }
 
 /** 由打包结果生成 JSON 对象（纯函数） */
@@ -58,7 +69,7 @@ export function buildAtlasJSON(layout: PackLayout, opts: BuildJsonOptions): Atla
   let total = 0;
 
   for (const f of layout.frames) {
-    frames[f.name] = {
+    const entry: AtlasJSONFrame = {
       frame: { x: f.x, y: f.y, w: f.w, h: f.h },
       rotated: false,
       trimmed: opts.trimmed,
@@ -66,6 +77,8 @@ export function buildAtlasJSON(layout: PackLayout, opts: BuildJsonOptions): Atla
       sourceSize: { w: f.srcW, h: f.srcH },
       duration: f.duration
     };
+    if (f.hash) entry.contentHash = f.hash;
+    frames[f.name] = entry;
     frameOrder.push(f.name);
     total += Math.max(1, f.duration);
   }
@@ -82,11 +95,14 @@ export function buildAtlasJSON(layout: PackLayout, opts: BuildJsonOptions): Atla
       trim: opts.settings.trim,
       padding: opts.settings.padding,
       maxSize: opts.settings.maxSize,
-      pot: opts.settings.pot
+      pot: opts.settings.pot,
+      strategy: opts.settings.strategy
     },
     totalDuration: total
   };
   if (opts.atlasDataURL) meta.atlasDataURL = opts.atlasDataURL;
+  if (opts.incremental !== undefined) meta.incremental = opts.incremental;
+  if (opts.report) meta.lastReport = opts.report;
 
   return { frames, meta };
 }
@@ -98,6 +114,7 @@ export interface ParsedFrameEntry {
   spriteSourceSize: { x: number; y: number; w: number; h: number };
   sourceSize: { w: number; h: number };
   trimmed: boolean;
+  contentHash?: string;
 }
 
 export interface ParsedAtlasJSON {
@@ -107,6 +124,8 @@ export interface ParsedAtlasJSON {
   settings: Settings;
   imageName: string;
   atlasDataURL?: string;
+  incremental: boolean;
+  report?: PackReport;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -146,7 +165,8 @@ export function parseAtlasJSON(raw: unknown): ParsedAtlasJSON {
     padding: typeof settingsRaw.padding === "number" ? settingsRaw.padding : 0,
     maxSize: typeof settingsRaw.maxSize === "number" ? settingsRaw.maxSize : size.w,
     pot: settingsRaw.pot !== false,
-    embedAtlas: true
+    embedAtlas: true,
+    strategy: settingsRaw.strategy === "compact" ? "compact" : "stable"
   };
 
   const order: string[] = Array.isArray(meta.frameOrder)
@@ -179,7 +199,8 @@ export function parseAtlasJSON(raw: unknown): ParsedAtlasJSON {
       frame,
       spriteSourceSize,
       sourceSize,
-      trimmed: f.trimmed === true
+      trimmed: f.trimmed === true,
+      ...(typeof f.contentHash === "string" ? { contentHash: f.contentHash } : {})
     });
   }
 
@@ -187,6 +208,46 @@ export function parseAtlasJSON(raw: unknown): ParsedAtlasJSON {
 
   const imageName = typeof meta.image === "string" ? meta.image : "atlas.png";
   const atlasDataURL = typeof meta.atlasDataURL === "string" ? meta.atlasDataURL : undefined;
+  const incremental = meta.incremental === true;
+  const report = parseReport(meta.lastReport);
 
-  return { frames, size, settings, imageName, ...(atlasDataURL ? { atlasDataURL } : {}) };
+  return {
+    frames,
+    size,
+    settings,
+    imageName,
+    incremental,
+    ...(report ? { report } : {}),
+    ...(atlasDataURL ? { atlasDataURL } : {})
+  };
+}
+
+const DELTA_KINDS = new Set(["kept", "moved", "replaced", "added", "removed"]);
+
+/** 校验并规范化 lastReport；结构不完整则忽略（不影响布局恢复） */
+function parseReport(raw: unknown): PackReport | undefined {
+  if (!isRecord(raw)) return undefined;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const strategy = raw.strategy === "compact" ? "compact" : "stable";
+  const deltas = Array.isArray(raw.deltas)
+    ? raw.deltas
+        .filter(isRecord)
+        .map((d) => ({
+          name: typeof d.name === "string" ? d.name : "",
+          kind: DELTA_KINDS.has(d.kind as string) ? (d.kind as PackReport["deltas"][number]["kind"]) : "kept",
+          dx: num(d.dx),
+          dy: num(d.dy)
+        }))
+    : [];
+  return {
+    incremental: raw.incremental === true,
+    strategy,
+    kept: num(raw.kept),
+    moved: num(raw.moved),
+    replaced: num(raw.replaced),
+    added: num(raw.added),
+    removed: num(raw.removed),
+    deltas,
+    timestamp: num(raw.timestamp)
+  };
 }

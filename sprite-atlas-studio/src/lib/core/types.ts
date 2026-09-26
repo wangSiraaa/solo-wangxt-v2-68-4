@@ -40,6 +40,8 @@ export interface PackedFrame {
   srcW: number;
   srcH: number;
   duration: number;
+  /** 内容摘要（裁切后像素哈希）；帧身份 = 名称 + 摘要 */
+  hash?: string;
 }
 
 /** 一次打包的结果 */
@@ -52,6 +54,41 @@ export interface PackResult {
   atlasUrl: string;
   padding: number;
   trimmed: boolean;
+  /** 最近一次打包（全量或增量）产生的变更摘要 */
+  report?: PackReport;
+}
+
+/** 重排策略：稳定优先（尽量复用旧坐标）或紧凑优先（全量重排） */
+export type PackStrategy = "stable" | "compact";
+
+/** 帧在一次增量打包中的变更类型 */
+export type FrameChangeKind = "kept" | "moved" | "replaced" | "added" | "removed";
+
+/** 单帧相对上一版布局的变更 */
+export interface FrameDelta {
+  name: string;
+  kind: FrameChangeKind;
+  /** 变更前内容坐标（删除/移动/替换前存在） */
+  from?: { x: number; y: number; w: number; h: number };
+  /** 变更后内容坐标（删除时不存在） */
+  to?: { x: number; y: number; w: number; h: number };
+  /** 内容位移（仅 moved / 发生位移的 replaced 有意义） */
+  dx: number;
+  dy: number;
+}
+
+/** 一次打包相对布局基线的结果摘要 */
+export interface PackReport {
+  /** 本次是否基于旧基线做的增量打包（false = 全量重排/首次打包） */
+  incremental: boolean;
+  strategy: PackStrategy;
+  kept: number;
+  moved: number;
+  replaced: number;
+  added: number;
+  removed: number;
+  deltas: FrameDelta[];
+  timestamp: number;
 }
 
 /** 打包/导出设置 */
@@ -66,6 +103,8 @@ export interface Settings {
   pot: boolean;
   /** 导出 JSON 时内嵌图集 dataURL（可独立恢复） */
   embedAtlas: boolean;
+  /** 有旧布局基线时：稳定优先做增量打包，紧凑优先则全量重排 */
+  strategy: PackStrategy;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -73,7 +112,8 @@ export const DEFAULT_SETTINGS: Settings = {
   padding: 2,
   maxSize: 2048,
   pot: true,
-  embedAtlas: true
+  embedAtlas: true,
+  strategy: "stable"
 };
 
 /** 类 ImageData 的最小结构，便于在 Node 中测试 */

@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { frames, moveFrame, removeFrame, selectedId, setDuration } from "../core/store";
+  import { frames, moveFrame, removeFrame, replaceFrameFile, selectedId, setDuration } from "../core/store";
 
   let dragIndex: number | null = null;
+  let replaceId: string | null = null;
+  let replaceInput: HTMLInputElement;
 
   function onDragStart(i: number) {
     dragIndex = i;
@@ -16,7 +18,29 @@
     }
     dragIndex = null;
   }
+
+  function pickReplacement(id: string) {
+    replaceId = id;
+    replaceInput.click();
+  }
+
+  async function onReplacePicked(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (file && replaceId) await replaceFrameFile(replaceId, file);
+    replaceId = null;
+  }
 </script>
+
+<input
+  bind:this={replaceInput}
+  type="file"
+  accept="image/png,.png"
+  hidden
+  on:change={(e) => void onReplacePicked(e)}
+/>
+
 
 <div class="panel frames-panel">
   <h2>帧序列（按原顺序播放）</h2>
@@ -57,6 +81,7 @@
             ms
           </span>
           <span class="ops">
+            <button title="替换同名帧图片（同名内容变化视为替换）" on:click|stopPropagation={() => pickReplacement(f.id)}>⇄</button>
             <button title="上移" on:click|stopPropagation={() => moveFrame(f.id, -1)}>↑</button>
             <button title="下移" on:click|stopPropagation={() => moveFrame(f.id, 1)}>↓</button>
             <button title="删除" class="danger" on:click|stopPropagation={() => removeFrame(f.id)}>✕</button>
